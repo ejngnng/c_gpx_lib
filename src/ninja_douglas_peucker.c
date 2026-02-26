@@ -72,7 +72,7 @@ int *douglas_peucker_simplify(const gpx_point_t *pts,
     if (n <= 2) {
         int *res = (int*)malloc(n * sizeof(int));
         if (!res) {
-            GPX_LOG("[Error] malloc size: %zu failed\n", n * sizeof(int));
+            GPX_LOG("[Error] malloc size: %lu failed\n", n * sizeof(int));
             return NULL;
         }
         for (size_t i=0; i<n; i++) {
@@ -108,7 +108,7 @@ int *douglas_peucker_simplify(const gpx_point_t *pts,
     // keep flags
     unsigned char *keep = (unsigned char*)calloc(n, 1);
     if (!keep) {
-        GPX_LOG("[Error] calloc size: %zu failed\n", n);
+        GPX_LOG("[Error] calloc size: %lu failed\n", n);
         free(xs); 
         free(ys); 
         return NULL;
@@ -121,7 +121,7 @@ int *douglas_peucker_simplify(const gpx_point_t *pts,
     size_t stack_sz = 0;
     size_t *stack = (size_t*)malloc(stack_cap * sizeof(size_t) * 2);
     if (!stack) { 
-        GPX_LOG("[Error] malloc size: %zu failed\n", stack_cap * sizeof(size_t) * 2);
+        GPX_LOG("[Error] malloc size: %lu failed\n", stack_cap * sizeof(size_t) * 2);
         free(xs); 
         free(ys); 
         free(keep); 
@@ -149,15 +149,24 @@ int *douglas_peucker_simplify(const gpx_point_t *pts,
             keep[idx] = 1;
             // push (s, idx) and (idx, e)
             if (stack_sz+2 >= stack_cap) {
-                stack_cap *= 2; 
-                stack = (size_t*)realloc(stack, stack_cap * sizeof(size_t) * 2);
-                if (!stack) { 
-                    GPX_LOG("[Error] realloc size: %zu failed\n", stack_cap * sizeof(size_t) * 2);
-                    free(xs); 
-                    free(ys); 
-                    free(keep); 
-                    return NULL; 
+                /* 
+                 * Change to linear step (+32) growth, 
+                 * and don't break existing segments when memory is insufficient 
+                 */
+                size_t ncap = stack_cap + 32; 
+                size_t *nstack = (size_t*)realloc(stack, ncap * sizeof(size_t) * 2);
+                if (!nstack) { 
+                    GPX_LOG("[Warn] stack realloc size: %lu failed, "
+                            "skipping refinement for this segment\n",
+                            ncap * sizeof(size_t) * 2);
+                    /* 
+                     * Stop subdivision when memory is insufficient 
+                     * to prevent losing entire result due to free
+                     */
+                    continue; 
                 }
+                stack = nstack;
+                stack_cap = ncap;
             }
             stack[stack_sz*2+0] = s; 
             stack[stack_sz*2+1] = idx; 
@@ -178,7 +187,7 @@ int *douglas_peucker_simplify(const gpx_point_t *pts,
     }    
     int *out = (int*)malloc(keep_count * sizeof(int));
     if (!out) {
-        GPX_LOG("[Error] malloc size: %zu failed\n", keep_count * sizeof(int));
+        GPX_LOG("[Error] malloc size: %lu failed\n", keep_count * sizeof(int));
         free(xs); 
         free(ys); 
         free(keep); 
@@ -201,4 +210,3 @@ int *douglas_peucker_simplify(const gpx_point_t *pts,
     }
     return out;
 }
-

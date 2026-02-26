@@ -141,16 +141,16 @@ int write_cache_bin(const char *path,
 void gpx_print_stats(size_t before, size_t after) {
     printf("===============================\n");
     if (before == 0) {
-        printf("Points before      : %zu \n", before);
-        printf("Points after       : %zu \n", after);
+        printf("Points before      : %lu \n", before);
+        printf("Points after       : %lu \n", after);
         printf("compression ratio  : N/A\n");
         return;
     }
     double ratio = (double)after / (double)before;  
     double percent = ratio * 100.0;
     double reduction = (1.0 - ratio) * 100.0;
-    printf("Points before      : %zu \n", before);
-    printf("Points after       : %zu \n", after);
+    printf("Points before      : %lu \n", before);
+    printf("Points after       : %lu \n", after);
     printf("compression ratio  : %.2f%% \n", percent);
     printf("reduction          : %.2f%% \n", reduction);
 }

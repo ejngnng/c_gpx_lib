@@ -12,11 +12,15 @@
  ******************************************************************/
 #include "ninja_gpx_parser.h"
 #include "ninja_gpx_log.h"
+#include "ninja_douglas_peucker.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
+/* Configuration for streaming processing memory optimization */
+#define STREAM_COMPRESS_THRESHOLD   (200)    /* Trigger in-memory compression when point count reaches this value */
+#define STREAM_COMPRESS_TOLERANCE   (10.0f)  /* Tolerance for intermediate compression (in meters) */
 
 /* internal dynamic array for points */ 
 typedef struct {
@@ -57,11 +61,49 @@ static void pts_buf_free(pts_buf_t *b) {
     \retval         0 on success, -1 on error
 */
 static int pts_buf_push(pts_buf_t *b, const gpx_point_t *p) {
+    /* When streaming threshold is reached, actively compress to free space */
+    if (b->count >= STREAM_COMPRESS_THRESHOLD) {
+        size_t out_count = 0;
+        int *keep = douglas_peucker_simplify(b->data, b->count, STREAM_COMPRESS_TOLERANCE, &out_count);
+        if (keep) {
+            if (out_count < b->count) {
+                /* Reorganize data in-place, keeping key points */
+                for (size_t i = 0; i < out_count; i++) {
+                    b->data[i] = b->data[keep[i]];
+                }
+                b->count = out_count;
+            }
+            free(keep);
+        }
+    }
+
     if (b->count >= b->cap) {
-        size_t ncap = b->cap ? b->cap * 2 : 64;
+        /* Change from exponential growth (cap * 2) to linear step (+64) to reduce memory allocation pressure */
+        size_t ncap = b->cap ? b->cap + 64 : 64;
         gpx_point_t *n = (gpx_point_t*)realloc(b->data, ncap * sizeof(gpx_point_t));
         if (!n) {
-            GPX_LOG("[Error] realloc size: %zu failed\n", ncap * sizeof(gpx_point_t));
+            /* Emergency fallback: when realloc fails, try to compress current buffer as recovery */
+            if (b->count > 10) {
+                GPX_LOG("[Warn] pts_buf_push: realloc failed, trying emergency compression...\n");
+                size_t out_count = 0;
+                int *keep = douglas_peucker_simplify(b->data, b->count, STREAM_COMPRESS_TOLERANCE, &out_count);
+                if (keep) {
+                    if (out_count < b->count) {
+                        for (size_t i = 0; i < out_count; i++) {
+                            b->data[i] = b->data[keep[i]];
+                        }
+                        b->count = out_count;
+                    }
+                    free(keep);
+                    
+                    /* If compression freed up space, store point directly and return success */
+                    if (b->count < b->cap) {
+                        b->data[b->count++] = *p;
+                        return 0;
+                    }
+                }
+            }
+            GPX_LOG("[Error] realloc size: %lu failed\n", ncap * sizeof(gpx_point_t));
             return -1;
         }
         b->data = n;
@@ -190,7 +232,11 @@ int gpx_parse_file(const char *path, trk_segment_cb_t cb, void *user_ctx) {
             }
             // if line also contains </trkpt> then push immediately
             if (strstr(s, "</trkpt>")) {
-                pts_buf_push(&buf, &cur_pt);
+                /* Check if memory allocation failed, exit to prevent null pointer crash */
+                if (pts_buf_push(&buf, &cur_pt) < 0) {
+                    GPX_LOG("[Error] pts_buf_push failed\n");
+                    break;
+                }
                 in_trkpt = 0;
             }
             continue;
@@ -204,7 +250,11 @@ int gpx_parse_file(const char *path, trk_segment_cb_t cb, void *user_ctx) {
                 cur_pt.ele = elebuf[0] ? atof(elebuf) : cur_pt.ele;
             }
             if (strstr(s, "</trkpt>")) {
-                pts_buf_push(&buf, &cur_pt);
+                /* Check if memory allocation failed, exit */
+                if (pts_buf_push(&buf, &cur_pt) < 0) {
+                    GPX_LOG("[Error] pts_buf_push failed\n");
+                    break;
+                }
                 in_trkpt = 0;
             }
             continue;
